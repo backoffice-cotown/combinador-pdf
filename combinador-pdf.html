@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Combinador de Documentos PDF</title>
+
+  <!-- Librerías -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+  <script src="https://unpkg.com/mammoth@1.6.0/mammoth.browser.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      background: #f5f4f0;
+      color: #1a1a18;
+      min-height: 100vh;
+      padding: 0;
+    }
+
+    .header {
+      background: #ffffff;
+      border-bottom: 1px solid #e8e6e0;
+      padding: 18px 32px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .header-icon {
+      width: 36px; height: 36px;
+      background: #e1f5ee;
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+    }
+    .header h1 { font-size: 17px; font-weight: 600; color: #1a1a18; }
+    .header p { font-size: 12px; color: #888780; margin-top: 1px; }
+
+    .container { max-width: 720px; margin: 0 auto; padding: 28px 20px 60px; }
+
+    .section-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: #888780;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 8px;
+    }
+
+    /* Zona contrato */
+    .contract-zone {
+      background: #ffffff;
+      border: 2px dashed #9FE1CB;
+      border-radius: 12px;
+      padding: 18px;
+      cursor: pointer;
+      transition: all 0.15s;
+      margin-bottom: 24px;
+    }
+    .contract-zone:hover { border-color: #1D9E75; background: #f4fbf8; }
+    .contract-zone.has-file { border-style: solid; border-color: #1D9E75; background: #f4fbf8; cursor: default; }
+    .contract-zone.drag-over { border-color: #1D9E75; background: #e6f7f1; }
+
+    .contract-placeholder {
+      display: flex; flex-direction: column; align-items: center;
+      gap: 6px; padding: 10px 0; color: #aaa;
+    }
+    .contract-placeholder .big-icon { font-size: 36px; }
+    .contract-placeholder .label { font-size: 14px; color: #666; font-weight: 500; }
+    .contract-placeholder .sublabel { font-size: 12px; color: #b0aea8; }
+
+    .contract-file-row {
+      display: flex; align-items: center; gap: 12px;
+    }
+    .contract-top-row {
+      display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+    }
+    .badge-first {
+      font-size: 10px; font-weight: 700;
+      background: #1D9E75; color: white;
+      padding: 2px 8px; border-radius: 20px;
+    }
+    .badge-hint { font-size: 12px; color: #888780; }
+
+    /* Zona documentos adicionales */
+    .docs-zone {
+      background: #ffffff;
+      border: 1.5px dashed #d3d1c7;
+      border-radius: 12px;
+      padding: 16px;
+      min-height: 80px;
+      margin-bottom: 12px;
+      transition: all 0.15s;
+    }
+    .docs-zone.drag-over { border-color: #185FA5; background: #f0f6fd; }
+
+    .docs-placeholder {
+      display: flex; flex-direction: column; align-items: center;
+      gap: 5px; padding: 16px 0; color: #c0bdb5;
+    }
+    .docs-placeholder .big-icon { font-size: 28px; }
+    .docs-placeholder .label { font-size: 13px; }
+    .docs-placeholder .sublabel { font-size: 11px; }
+
+    /* File items */
+    .file-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 10px;
+      background: #f8f7f4;
+      border-radius: 8px;
+      margin-bottom: 6px;
+      border: 1px solid #ede9e3;
+      cursor: grab;
+      transition: background 0.1s, box-shadow 0.1s;
+      user-select: none;
+    }
+    .file-item:last-child { margin-bottom: 0; }
+    .file-item:hover { background: #f2f0ec; }
+    .file-item.dragging { opacity: 0.4; }
+    .file-item.drag-target { box-shadow: 0 0 0 2px #1D9E75; }
+
+    .drag-handle { font-size: 14px; color: #c8c5bf; flex-shrink: 0; }
+    .file-icon-box {
+      width: 32px; height: 32px; border-radius: 7px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 15px; flex-shrink: 0;
+    }
+    .icon-pdf  { background: #fce8e8; }
+    .icon-img  { background: #e1f5ee; }
+    .icon-word { background: #e6f1fb; }
+    .icon-other{ background: #f0ede8; }
+
+    .file-name { font-size: 13px; color: #1a1a18; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-size { font-size: 11px; color: #b4b2a9; flex-shrink: 0; }
+    .file-remove {
+      width: 24px; height: 24px; border-radius: 50%; border: none;
+      background: none; cursor: pointer; color: #c0bdb5;
+      font-size: 18px; line-height: 1; display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; transition: color 0.1s, background 0.1s;
+    }
+    .file-remove:hover { color: #c0392b; background: #fce8e8; }
+
+    /* Contract file in zone */
+    .contract-file-icon {
+      width: 38px; height: 38px; border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px; flex-shrink: 0;
+    }
+    .contract-file-name { font-size: 14px; font-weight: 500; color: #1a1a18; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .contract-file-size { font-size: 12px; color: #b4b2a9; }
+
+    /* Buttons */
+    .add-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 8px 16px; border-radius: 8px;
+      border: 1px solid #d3d1c7; background: #ffffff;
+      cursor: pointer; font-size: 13px; color: #1a1a18;
+      transition: background 0.12s;
+      margin-top: 8px;
+    }
+    .add-btn:hover { background: #f0ede8; }
+
+    .divider { border: none; border-top: 1px solid #e8e6e0; margin: 24px 0; }
+
+    /* Orden preview */
+    .order-section { margin-bottom: 20px; }
+    .order-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+    .order-chip {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 4px 10px; border-radius: 20px;
+      background: #f0ede8; border: 1px solid #dedad4;
+      font-size: 11px; color: #5f5e5a;
+    }
+    .order-chip .num { font-weight: 700; color: #1D9E75; }
+
+    /* Merge button */
+    .merge-btn {
+      width: 100%; padding: 14px;
+      background: #1D9E75; color: white;
+      border: none; border-radius: 10px;
+      font-size: 15px; font-weight: 600;
+      cursor: pointer; transition: background 0.15s, transform 0.1s;
+    }
+    .merge-btn:hover { background: #0f7a5a; }
+    .merge-btn:active { transform: scale(0.99); }
+    .merge-btn:disabled { background: #9FE1CB; cursor: not-allowed; transform: none; }
+
+    /* Progress overlay */
+    .overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(255,255,255,0.9);
+      z-index: 100;
+      flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+    }
+    .overlay.visible { display: flex; }
+    .spinner {
+      width: 48px; height: 48px;
+      border: 4px solid #e8e6e0;
+      border-top-color: #1D9E75;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .progress-label { font-size: 15px; color: #444; font-weight: 500; }
+    .progress-sub { font-size: 13px; color: #888780; }
+    .progress-bar-wrap { width: 260px; height: 6px; background: #e8e6e0; border-radius: 3px; overflow: hidden; }
+    .progress-bar { height: 100%; background: #1D9E75; border-radius: 3px; transition: width 0.3s; width: 0%; }
+
+    /* Success state */
+    .success-box {
+      display: none;
+      background: #e6f7f1;
+      border: 1px solid #9FE1CB;
+      border-radius: 12px;
+      padding: 20px;
+      text-align: center;
+      margin-top: 16px;
+    }
+    .success-box.visible { display: block; }
+    .success-box .big-check { font-size: 40px; margin-bottom: 8px; }
+    .success-box h3 { font-size: 16px; font-weight: 600; color: #0f6e56; margin-bottom: 4px; }
+    .success-box p { font-size: 13px; color: #1D9E75; margin-bottom: 16px; }
+    .download-btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 12px 24px; border-radius: 8px;
+      background: #1D9E75; color: white;
+      border: none; cursor: pointer;
+      font-size: 14px; font-weight: 600;
+      text-decoration: none;
+      transition: background 0.15s;
+    }
+    .download-btn:hover { background: #0f7a5a; }
+
+    /* Error */
+    .error-box {
+      display: none;
+      background: #fce8e8;
+      border: 1px solid #f5c4c4;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 13px;
+      color: #8b2020;
+      margin-top: 12px;
+    }
+    .error-box.visible { display: block; }
+
+    /* Warning for Word */
+    .word-note {
+      font-size: 11px; color: #888780;
+      background: #fffbe6; border: 1px solid #f0e0a0;
+      border-radius: 6px; padding: 6px 10px;
+      margin-top: 8px; display: none;
+    }
+    .word-note.visible { display: block; }
+
+    input[type="file"] { display: none; }
+  </style>
+</head>
+<body>
+
+<!-- Capa de progreso -->
+<div class="overlay" id="overlay">
+  <div class="spinner"></div>
+  <div class="progress-label" id="progressLabel">Procesando archivos…</div>
+  <div class="progress-bar-wrap"><div class="progress-bar" id="progressBar"></div></div>
+  <div class="progress-sub" id="progressSub">Por favor espera</div>
+</div>
+
+<!-- Cabecera -->
+<div class="header">
+  <div class="header-icon">📄</div>
+  <div>
+    <h1>Combinador de Documentos</h1>
+    <p>El contrato siempre aparece primero · PDF, Word, PNG, JPEG</p>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- Zona contrato -->
+  <p class="section-label">Contrato (siempre va primero)</p>
+  <div class="contract-zone" id="contractZone" onclick="triggerContractInput()">
+    <input type="file" id="contractInput" accept=".pdf,.png,.jpg,.jpeg,.docx,.doc">
+    <div id="contractPlaceholder" class="contract-placeholder">
+      <div class="big-icon">📋</div>
+      <div class="label">Haz clic aquí o arrastra el contrato</div>
+      <div class="sublabel">PDF, Word, PNG o JPEG</div>
+    </div>
+    <div id="contractFileInfo" style="display:none;">
+      <div class="contract-top-row">
+        <span class="badge-first">Página 1</span>
+        <span class="badge-hint">Este archivo irá siempre al inicio del PDF</span>
+      </div>
+      <div class="contract-file-row">
+        <div class="contract-file-icon icon-pdf" id="contractIconBox">📄</div>
+        <span class="contract-file-name" id="contractFileName">—</span>
+        <span class="contract-file-size" id="contractFileSize">—</span>
+        <button class="file-remove" id="contractRemoveBtn" title="Quitar contrato">×</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Documentos adicionales -->
+  <p class="section-label">Documentos adicionales</p>
+  <div class="docs-zone" id="docsZone">
+    <div id="docsPlaceholder" class="docs-placeholder">
+      <div class="big-icon">📎</div>
+      <div class="label">Arrastra archivos aquí</div>
+      <div class="sublabel">PDF · Word · PNG · JPEG — arrastra para reordenar</div>
+    </div>
+    <div id="fileList"></div>
+  </div>
+  <div class="word-note" id="wordNote">
+    ℹ️ Los archivos Word se convertirán con formato básico. Para resultado perfecto, convierte el Word a PDF antes de subirlo.
+  </div>
+
+  <button class="add-btn" onclick="document.getElementById('docsInput').click()">
+    ＋ Agregar archivos
+  </button>
+  <input type="file" id="docsInput" accept=".pdf,.png,.jpg,.jpeg,.docx,.doc" multiple>
+
+  <div class="divider"></div>
+
+  <!-- Orden final -->
+  <div class="order-section" id="orderSection" style="display:none;">
+    <p class="section-label">Orden del PDF final</p>
+    <div class="order-chips" id="orderChips"></div>
+    <div class="divider" style="margin-top:20px;"></div>
+  </div>
+
+  <!-- Botón combinar -->
+  <button class="merge-btn" id="mergeBtn" onclick="startMerge()" disabled>
+    Combinar y descargar PDF
+  </button>
+
+  <!-- Error -->
+  <div class="error-box" id="errorBox"></div>
+
+  <!-- Éxito -->
+  <div class="success-box" id="successBox">
+    <div class="big-check">✅</div>
+    <h3>¡PDF combinado listo!</h3>
+    <p id="successMsg">Tu documento está listo para descargar.</p>
+    <a class="download-btn" id="downloadLink" href="#" download="documentos-combinados.pdf">
+      ⬇ Descargar PDF
+    </a>
+    <br><br>
+    <button class="add-btn" onclick="resetAll()" style="margin-top:8px;">Combinar otros archivos</button>
+  </div>
+
+</div>
+
+<script>
+// ─── Estado ────────────────────────────────────────────────────
+let contractFile = null;
+let extraFiles   = [];
+let dragSrcIdx   = null;
+
+// ─── Referencias DOM ───────────────────────────────────────────
+const contractZone      = document.getElementById('contractZone');
+const contractInput     = document.getElementById('contractInput');
+const contractPlaceholder = document.getElementById('contractPlaceholder');
+const contractFileInfo  = document.getElementById('contractFileInfo');
+const contractFileName  = document.getElementById('contractFileName');
+const contractFileSize  = document.getElementById('contractFileSize');
+const contractIconBox   = document.getElementById('contractIconBox');
+const contractRemoveBtn = document.getElementById('contractRemoveBtn');
+const docsZone          = document.getElementById('docsZone');
+const docsInput         = document.getElementById('docsInput');
+const docsPlaceholder   = document.getElementById('docsPlaceholder');
+const fileList          = document.getElementById('fileList');
+const mergeBtn          = document.getElementById('mergeBtn');
+const orderSection      = document.getElementById('orderSection');
+const orderChips        = document.getElementById('orderChips');
+const overlay           = document.getElementById('overlay');
+const progressLabel     = document.getElementById('progressLabel');
+const progressSub       = document.getElementById('progressSub');
+const progressBar       = document.getElementById('progressBar');
+const successBox        = document.getElementById('successBox');
+const successMsg        = document.getElementById('successMsg');
+const downloadLink      = document.getElementById('downloadLink');
+const errorBox          = document.getElementById('errorBox');
+const wordNote          = document.getElementById('wordNote');
+
+// ─── Utilidades ────────────────────────────────────────────────
+function fmtSize(b) {
+  if (b < 1024)            return b + ' B';
+  if (b < 1024*1024)       return (b/1024).toFixed(1) + ' KB';
+  return (b/(1024*1024)).toFixed(1) + ' MB';
+}
+
+function fileIcon(name) {
+  const ext = name.split('.').pop().toLowerCase();
+  if (ext === 'pdf')                     return { emoji: '📄', cls: 'icon-pdf'  };
+  if (['png','jpg','jpeg'].includes(ext)) return { emoji: '🖼️', cls: 'icon-img'  };
+  if (['doc','docx'].includes(ext))       return { emoji: '📝', cls: 'icon-word' };
+  return { emoji: '📎', cls: 'icon-other' };
+}
+
+function hasWordFile() {
+  const all = contractFile ? [contractFile, ...extraFiles] : extraFiles;
+  return all.some(f => /\.(doc|docx)$/i.test(f.name));
+}
+
+// ─── Actualizar UI ─────────────────────────────────────────────
+function updateUI() {
+  // Zona contrato
+  if (contractFile) {
+    contractZone.classList.add('has-file');
+    contractPlaceholder.style.display = 'none';
+    contractFileInfo.style.display = 'block';
+    const ic = fileIcon(contractFile.name);
+    contractIconBox.textContent = ic.emoji;
+    contractIconBox.className   = 'contract-file-icon ' + ic.cls;
+    contractFileName.textContent = contractFile.name;
+    contractFileSize.textContent = fmtSize(contractFile.size);
+  } else {
+    contractZone.classList.remove('has-file');
+    contractPlaceholder.style.display = 'flex';
+    contractFileInfo.style.display = 'none';
+  }
+
+  // Lista de archivos adicionales
+  docsPlaceholder.style.display = extraFiles.length ? 'none' : 'flex';
+  fileList.innerHTML = '';
+  extraFiles.forEach((f, i) => {
+    const ic = fileIcon(f.name);
+    const el = document.createElement('div');
+    el.className   = 'file-item';
+    el.draggable   = true;
+    el.dataset.idx = i;
+    el.innerHTML = `
+      <span class="drag-handle" title="Arrastra para reordenar">⠿</span>
+      <div class="file-icon-box ${ic.cls}">${ic.emoji}</div>
+      <span class="file-name" title="${f.name}">${f.name}</span>
+      <span class="file-size">${fmtSize(f.size)}</span>
+      <button class="file-remove" data-idx="${i}" title="Eliminar">×</button>
+    `;
+    el.addEventListener('dragstart', onDragStart);
+    el.addEventListener('dragover',  onDragOver);
+    el.addEventListener('drop',      onDrop);
+    el.addEventListener('dragend',   onDragEnd);
+    el.querySelector('.file-remove').addEventListener('click', e => {
+      e.stopPropagation();
+      extraFiles.splice(parseInt(e.currentTarget.dataset.idx), 1);
+      updateUI();
+    });
+    fileList.appendChild(el);
+  });
+
+  // Nota Word
+  wordNote.classList.toggle('visible', hasWordFile());
+
+  // Botón combinar
+  mergeBtn.disabled = !contractFile;
+
+  // Orden final
+  const allFiles = contractFile ? [contractFile, ...extraFiles] : [];
+  if (allFiles.length) {
+    orderSection.style.display = 'block';
+    orderChips.innerHTML = '';
+    allFiles.forEach((f, i) => {
+      const ic = fileIcon(f.name);
+      const chip = document.createElement('span');
+      chip.className = 'order-chip';
+      chip.innerHTML = `<span class="num">${i+1}</span> ${ic.emoji} ${f.name.length>28 ? f.name.slice(0,26)+'…' : f.name}`;
+      orderChips.appendChild(chip);
+    });
+  } else {
+    orderSection.style.display = 'none';
+  }
+}
+
+// ─── Drag & drop reordenar ─────────────────────────────────────
+function onDragStart(e) {
+  dragSrcIdx = parseInt(e.currentTarget.dataset.idx);
+  e.currentTarget.classList.add('dragging');
+}
+function onDragEnd(e) {
+  e.currentTarget.classList.remove('dragging');
+  document.querySelectorAll('.file-item').forEach(el => el.classList.remove('drag-target'));
+  dragSrcIdx = null;
+}
+function onDragOver(e) {
+  e.preventDefault();
+  document.querySelectorAll('.file-item').forEach(el => el.classList.remove('drag-target'));
+  e.currentTarget.classList.add('drag-target');
+}
+function onDrop(e) {
+  e.stopPropagation(); e.preventDefault();
+  const target = parseInt(e.currentTarget.dataset.idx);
+  if (dragSrcIdx !== null && dragSrcIdx !== target) {
+    const moved = extraFiles.splice(dragSrcIdx, 1)[0];
+    extraFiles.splice(target, 0, moved);
+    updateUI();
+  }
+}
+
+// ─── Drag & drop en zonas ──────────────────────────────────────
+['dragenter','dragover'].forEach(ev => {
+  contractZone.addEventListener(ev, e => { e.preventDefault(); contractZone.classList.add('drag-over'); });
+  docsZone.addEventListener(ev,      e => { e.preventDefault(); docsZone.classList.add('drag-over'); });
+});
+['dragleave','drop'].forEach(ev => {
+  contractZone.addEventListener(ev, () => contractZone.classList.remove('drag-over'));
+  docsZone.addEventListener(ev,      () => docsZone.classList.remove('drag-over'));
+});
+contractZone.addEventListener('drop', e => {
+  e.preventDefault();
+  const f = e.dataTransfer.files[0];
+  if (f) { contractFile = f; updateUI(); }
+});
+docsZone.addEventListener('drop', e => {
+  e.preventDefault();
+  Array.from(e.dataTransfer.files).forEach(f => extraFiles.push(f));
+  updateUI();
+});
+
+// ─── Inputs de archivo ─────────────────────────────────────────
+function triggerContractInput() {
+  if (!contractFile) document.getElementById('contractInput').click();
+}
+contractInput.addEventListener('change', e => {
+  if (e.target.files[0]) { contractFile = e.target.files[0]; updateUI(); }
+  e.target.value = '';
+});
+contractRemoveBtn.addEventListener('click', e => {
+  e.stopPropagation();
+  contractFile = null;
+  updateUI();
+});
+docsInput.addEventListener('change', e => {
+  Array.from(e.target.files).forEach(f => extraFiles.push(f));
+  updateUI();
+  e.target.value = '';
+});
+
+// ─── Progreso ──────────────────────────────────────────────────
+function setProgress(pct, label, sub) {
+  progressBar.style.width = pct + '%';
+  if (label) progressLabel.textContent = label;
+  if (sub)   progressSub.textContent   = sub;
+}
+
+// ─── Procesamiento de archivos ─────────────────────────────────
+function addImagePage(doc, img) {
+  const A4W = 595, A4H = 842;
+  const scale = Math.min(A4W / img.width, A4H / img.height);
+  const w = img.width  * scale;
+  const h = img.height * scale;
+  const x = (A4W - w) / 2;
+  const y = (A4H - h) / 2;
+  const page = doc.addPage([A4W, A4H]);
+  page.drawImage(img, { x, y, width: w, height: h });
+  // Fondo blanco detrás de la imagen
+  page.drawRectangle({ x: 0, y: 0, width: A4W, height: A4H, color: PDFLib.rgb(1,1,1) });
+  page.drawImage(img, { x, y, width: w, height: h });
+}
+
+async function processWordFile(mergedDoc, bytes) {
+  // Convertir Word a HTML con mammoth
+  const result = await mammoth.convertToHtml({ arrayBuffer: bytes });
+  const html = result.value || '<p>(Documento vacío)</p>';
+
+  // Contenedor temporal para renderizar
+  const wrap = document.createElement('div');
+  wrap.style.cssText = [
+    'position:fixed', 'left:-9999px', 'top:0',
+    'width:794px', 'background:#fff',
+    'padding:60px 72px', 'font-family:Arial,Helvetica,sans-serif',
+    'font-size:11.5px', 'line-height:1.65', 'color:#000',
+    'box-sizing:border-box', 'word-wrap:break-word'
+  ].join(';');
+  wrap.innerHTML = html;
+  document.body.appendChild(wrap);
+  await new Promise(r => setTimeout(r, 250));
+
+  const canvas = await html2canvas(wrap, {
+    width: 794, scale: 1.5,
+    backgroundColor: '#ffffff',
+    logging: false, useCORS: false
+  });
+  document.body.removeChild(wrap);
+
+  // Cortar en páginas A4
+  const scaleF   = 1.5;
+  const pageH_px = Math.round(1122 * scaleF); // A4 height en px
+  const pageW_px = canvas.width;
+  const totalPgs = Math.max(1, Math.ceil(canvas.height / pageH_px));
+
+  for (let i = 0; i < totalPgs; i++) {
+    const slice = document.createElement('canvas');
+    slice.width  = pageW_px;
+    slice.height = pageH_px;
+    const ctx = slice.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, pageW_px, pageH_px);
+    ctx.drawImage(canvas, 0, -(i * pageH_px));
+
+    const blob     = await new Promise(res => slice.toBlob(res, 'image/jpeg', 0.92));
+    const imgBytes = await blob.arrayBuffer();
+    const jpgImg   = await mergedDoc.embedJpg(imgBytes);
+    const page     = mergedDoc.addPage([595, 842]);
+    page.drawImage(jpgImg, { x: 0, y: 0, width: 595, height: 842 });
+  }
+}
+
+async function processFile(mergedDoc, file, idx, total) {
+  const name = file.name;
+  const ext  = name.split('.').pop().toLowerCase();
+  setProgress(
+    Math.round((idx / total) * 85),
+    `Procesando archivo ${idx + 1} de ${total}…`,
+    name.length > 40 ? name.slice(0,38)+'…' : name
+  );
+
+  const bytes = await file.arrayBuffer();
+
+  if (ext === 'pdf') {
+    const srcDoc = await PDFLib.PDFDocument.load(bytes, { ignoreEncryption: true });
+    const pages  = await mergedDoc.copyPages(srcDoc, srcDoc.getPageIndices());
+    pages.forEach(p => mergedDoc.addPage(p));
+
+  } else if (ext === 'png') {
+    const img = await mergedDoc.embedPng(bytes);
+    addImagePage(mergedDoc, img);
+
+  } else if (['jpg','jpeg'].includes(ext)) {
+    const img = await mergedDoc.embedJpg(bytes);
+    addImagePage(mergedDoc, img);
+
+  } else if (['doc','docx'].includes(ext)) {
+    if (typeof mammoth === 'undefined') throw new Error('La librería de Word no cargó. Recarga la página.');
+    if (typeof html2canvas === 'undefined') throw new Error('html2canvas no cargó. Recarga la página.');
+    await processWordFile(mergedDoc, bytes);
+
+  } else {
+    throw new Error(`Formato no compatible: .${ext} — usa PDF, Word, PNG o JPEG.`);
+  }
+}
+
+// ─── Combinar ──────────────────────────────────────────────────
+async function startMerge() {
+  if (!contractFile) return;
+
+  errorBox.classList.remove('visible');
+  successBox.classList.remove('visible');
+  mergeBtn.disabled = true;
+  overlay.classList.add('visible');
+  setProgress(0, 'Iniciando combinación…', '');
+
+  try {
+    const allFiles = [contractFile, ...extraFiles];
+    const mergedDoc = await PDFLib.PDFDocument.create();
+
+    for (let i = 0; i < allFiles.length; i++) {
+      await processFile(mergedDoc, allFiles[i], i, allFiles.length);
+    }
+
+    setProgress(92, 'Generando PDF final…', 'Casi listo…');
+    const pdfBytes = await mergedDoc.save();
+
+    setProgress(100, '¡Listo!', '');
+    await new Promise(r => setTimeout(r, 400));
+
+    // Descargar
+    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+    const url  = URL.createObjectURL(blob);
+    downloadLink.href = url;
+    const fmtName = contractFile.name.replace(/\.[^.]+$/, '');
+    downloadLink.download = `${fmtName}_combinado.pdf`;
+
+    const totalPages = allFiles.length; // aproximado
+    successMsg.textContent = `${allFiles.length} archivo${allFiles.length>1?'s':''} combinados · ${fmtSize(pdfBytes.byteLength)}`;
+
+    overlay.classList.remove('visible');
+    successBox.classList.add('visible');
+    successBox.scrollIntoView({ behavior: 'smooth' });
+
+  } catch (err) {
+    overlay.classList.remove('visible');
+    mergeBtn.disabled = false;
+    errorBox.textContent = '❌ Error: ' + err.message;
+    errorBox.classList.add('visible');
+    console.error(err);
+  }
+}
+
+// ─── Reset ─────────────────────────────────────────────────────
+function resetAll() {
+  contractFile = null;
+  extraFiles   = [];
+  successBox.classList.remove('visible');
+  errorBox.classList.remove('visible');
+  updateUI();
+}
+
+// ─── Init ──────────────────────────────────────────────────────
+updateUI();
+</script>
+</body>
+</html>
