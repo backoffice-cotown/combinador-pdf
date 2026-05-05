@@ -561,83 +561,195 @@ function addImagePage(doc, img) {
   page.drawImage(img, { x, y, width: w, height: h });
 }
 
+// ─── Motor vectorial Word → PDF ────────────────────────────────
+
+// Limpia caracteres fuera de latin-1 que pdf-lib no soporta
+function safeStr(t) {
+  return (t || '')
+    .replace(/‘|’/g, "'")
+    .replace(/“|”/g, '"')
+    .replace(/–/g, '-').replace(/—/g, '--')
+    .replace(/…/g, '...').replace(/·/g, '-')
+    .replace(/[^\x00-\xFF]/g, '');
+}
+
+// Elimina marcadores markdown del texto plano
+function stripMd(t) {
+  return t.replace(/\*{1,3}([^*\n]+)\*{1,3}/g, '$1').replace(/^#{1,6}\s*/gm, '');
+}
+
+// Divide un texto en líneas que caben en maxW puntos
+function wrapLine(text, font, size, maxW) {
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines = []; let cur = '';
+  for (const w of words) {
+    const try_ = cur ? cur + ' ' + w : w;
+    if (font.widthOfTextAtSize(try_, size) <= maxW) { cur = try_; }
+    else { if (cur) lines.push(cur); cur = w; }
+  }
+  if (cur) lines.push(cur);
+  return lines.length ? lines : [''];
+}
+
+// Segmentos inline: **negrita**, *cursiva*, ***ambos***
+function inlineSegs(raw) {
+  const segs = []; const re = /\*{3}([^*\n]+)\*{3}|\*{2}([^*\n]+)\*{2}|\*([^*\n]+)\*/g;
+  let pos = 0, m;
+  while ((m = re.exec(raw)) !== null) {
+    if (m.index > pos) segs.push({ t: raw.slice(pos, m.index), b: false, i: false });
+    if (m[1]) segs.push({ t: m[1], b: true, i: true });
+    else if (m[2]) segs.push({ t: m[2], b: true, i: false });
+    else if (m[3]) segs.push({ t: m[3], b: false, i: true });
+    pos = m.index + m[0].length;
+  }
+  if (pos < raw.length) segs.push({ t: raw.slice(pos), b: false, i: false });
+  return segs.length ? segs : [{ t: raw, b: false, i: false }];
+}
+
+// Parsea markdown en bloques estructurados
+function parseMdBlocks(text) {
+  const lines = text.split('\n'); const out = [];
+  for (const l of lines) {
+    const t = l.trim(); if (!t) { if (out.length && out[out.length-1].type !== 'br') out.push({ type: 'br' }); continue; }
+    let m;
+    if      ((m = t.match(/^#{6}\s+(.*)/))) out.push({ type: 'h6', raw: m[1] });
+    else if ((m = t.match(/^#{5}\s+(.*)/))) out.push({ type: 'h5', raw: m[1] });
+    else if ((m = t.match(/^#{4}\s+(.*)/))) out.push({ type: 'h4', raw: m[1] });
+    else if ((m = t.match(/^#{3}\s+(.*)/))) out.push({ type: 'h3', raw: m[1] });
+    else if ((m = t.match(/^#{2}\s+(.*)/))) out.push({ type: 'h2', raw: m[1] });
+    else if ((m = t.match(/^#{1}\s+(.*)/))) out.push({ type: 'h1', raw: m[1] });
+    else if ((m = t.match(/^(\d+)\.\s+(.*)/))) out.push({ type: 'ol', num: parseInt(m[1]), raw: m[2] });
+    else if ((m = t.match(/^[-*]\s+(.*)/))) out.push({ type: 'ul', raw: m[1] });
+    else out.push({ type: 'p', raw: t });
+  }
+  return out;
+}
+
+// Parsea HTML de mammoth en bloques estructurados
+function parseHtmlBlocks(html) {
+  const div = document.createElement('div'); div.innerHTML = html;
+  const out = [];
+  div.childNodes.forEach(node => {
+    const tag = (node.tagName || '').toLowerCase();
+    const text = (node.textContent || '').trim();
+    if (!text) { out.push({ type: 'br' }); return; }
+    if (tag === 'h1') out.push({ type: 'h1', raw: text });
+    else if (tag === 'h2') out.push({ type: 'h2', raw: text });
+    else if (tag === 'h3') out.push({ type: 'h3', raw: text });
+    else if (tag === 'h4') out.push({ type: 'h4', raw: text });
+    else if (tag === 'ul') node.querySelectorAll('li').forEach(li => out.push({ type: 'ul', raw: li.textContent.trim() }));
+    else if (tag === 'ol') { let n=1; node.querySelectorAll('li').forEach(li => out.push({ type: 'ol', num: n++, raw: li.textContent.trim() })); }
+    else out.push({ type: 'p', raw: text });
+  });
+  return out;
+}
+
+// Renderiza bloques → páginas PDF vectoriales
+async function renderBlocksToPDF(mergedDoc, blocks) {
+  const { rgb, StandardFonts } = PDFLib;
+  const FN  = await mergedDoc.embedFont(StandardFonts.TimesRoman);
+  const FB  = await mergedDoc.embedFont(StandardFonts.TimesRomanBold);
+  const FI  = await mergedDoc.embedFont(StandardFonts.TimesRomanItalic);
+  const FBI = await mergedDoc.embedFont(StandardFonts.TimesRomanBoldItalic);
+  const pickF = (b, i) => b && i ? FBI : b ? FB : i ? FI : FN;
+
+  const A4W=595, A4H=842, ML=70, MR=70, MT=72, MB=72, CW=595-70-70;
+  let page = mergedDoc.addPage([A4W,A4H]); let y = A4H - MT;
+  const newPage = () => { page = mergedDoc.addPage([A4W,A4H]); y = A4H - MT; };
+  const chkY = h => { if (y - h < MB) newPage(); };
+
+  // Estilos por tipo de bloque
+  const S = {
+    h1: { sz:14, b:true,  i:false, lh:21, bef:14, aft:5,  indent:0,  align:'center', upper:true  },
+    h2: { sz:12, b:true,  i:false, lh:18, bef:12, aft:4,  indent:0,  align:'left',   upper:true  },
+    h3: { sz:11, b:true,  i:false, lh:17, bef:9,  aft:3,  indent:0,  align:'left',   upper:false },
+    h4: { sz:11, b:true,  i:false, lh:16, bef:7,  aft:2,  indent:0,  align:'left',   upper:false },
+    h5: { sz:10, b:true,  i:false, lh:15, bef:5,  aft:2,  indent:0,  align:'left',   upper:false },
+    h6: { sz:10, b:false, i:true,  lh:14, bef:4,  aft:2,  indent:0,  align:'left',   upper:false },
+    p:  { sz:10, b:false, i:false, lh:15, bef:0,  aft:7,  indent:0,  align:'left',   upper:false },
+    ul: { sz:10, b:false, i:false, lh:15, bef:0,  aft:3,  indent:14, align:'left',   upper:false },
+    ol: { sz:10, b:false, i:false, lh:15, bef:0,  aft:3,  indent:20, align:'left',   upper:false },
+    br: null,
+  };
+
+  const BLACK = rgb(0,0,0);
+
+  for (const blk of blocks) {
+    if (blk.type === 'br') { y -= 7; continue; }
+    const s = S[blk.type] || S.p;
+    let rawText = safeStr(blk.raw || '');
+    if (s.upper) rawText = rawText.toUpperCase();
+    const plain = safeStr(stripMd(rawText));
+    if (!plain.trim()) { y -= s.aft; continue; }
+
+    const mainFont = pickF(s.b, s.i);
+    const lineW = CW - s.indent;
+    const wrapped = wrapLine(plain, mainFont, s.sz, lineW);
+
+    y -= s.bef;
+    chkY(wrapped.length * s.lh);
+
+    // Prefijo de lista
+    if (blk.type === 'ul') {
+      chkY(s.lh);
+      page.drawText('-', { x: ML, y, size: s.sz, font: FB, color: BLACK });
+    } else if (blk.type === 'ol') {
+      chkY(s.lh);
+      page.drawText(blk.num + '.', { x: ML, y, size: s.sz, font: FB, color: BLACK });
+    }
+
+    // Dibujar líneas
+    for (let li = 0; li < wrapped.length; li++) {
+      chkY(s.lh);
+      const lineText = wrapped[li];
+      let x = ML + s.indent;
+      if (s.align === 'center') {
+        x = ML + (CW - mainFont.widthOfTextAtSize(lineText, s.sz)) / 2;
+      }
+
+      // Renderizar con formato inline (negrita dentro de párrafo)
+      if (blk.type === 'p' && /\*/.test(rawText)) {
+        const segs = inlineSegs(rawText);
+        let cx = x;
+        for (const seg of segs) {
+          const st = safeStr(seg.t);
+          if (!st) continue;
+          const f = pickF(seg.b, seg.i);
+          page.drawText(st, { x: cx, y, size: s.sz, font: f, color: BLACK });
+          cx += f.widthOfTextAtSize(st, s.sz);
+        }
+      } else {
+        page.drawText(lineText, { x, y, size: s.sz, font: mainFont, color: BLACK });
+      }
+
+      y -= s.lh;
+      if (y < MB && li < wrapped.length - 1) newPage();
+    }
+    y -= s.aft;
+  }
+}
+
 async function processWordFile(mergedDoc, bytes) {
-  // Extraer texto plano y HTML con mammoth
-  const [htmlResult, rawResult] = await Promise.all([
+  if (typeof mammoth === 'undefined') throw new Error('Librería de Word no cargada. Recarga la página.');
+
+  const [htmlRes, rawRes] = await Promise.all([
     mammoth.convertToHtml({ arrayBuffer: bytes }),
     mammoth.extractRawText({ arrayBuffer: bytes })
   ]);
-  const rawText = rawResult.value || '';
+  const rawText = rawRes.value || '';
+  const htmlText = htmlRes.value || '';
 
-  // Detectar si es Markdown (contiene # encabezados o **negrita**)
-  const looksLikeMarkdown = /^#{1,6}\s.+/m.test(rawText) || /\*\*[^*\n]+\*\*/m.test(rawText);
+  // Detectar si el documento usa sintaxis Markdown
+  const isMd = /^#{1,6}\s/m.test(rawText) || /\*\*[^*\n]{2,}\*\*/m.test(rawText);
 
-  let html;
-  if (looksLikeMarkdown && typeof marked !== 'undefined') {
-    // Renderizar como Markdown con estilos bonitos
-    html = marked.parse(rawText);
+  let blocks;
+  if (isMd) {
+    blocks = parseMdBlocks(rawText);
   } else {
-    html = htmlResult.value || '<p>(Documento vacío)</p>';
+    blocks = parseHtmlBlocks(htmlText);
   }
 
-  // Estilos para que el contrato se vea profesional
-  const styledHtml = `
-    <style>
-      body { font-family: 'Georgia', serif; font-size: 11px; line-height: 1.7; color: #111; }
-      h1 { font-size: 14px; font-weight: bold; text-align: center; margin: 16px 0 8px; text-transform: uppercase; letter-spacing: 0.05em; }
-      h2 { font-size: 12px; font-weight: bold; margin: 14px 0 6px; text-transform: uppercase; }
-      h3 { font-size: 11px; font-weight: bold; margin: 10px 0 4px; }
-      p  { margin: 0 0 8px; text-align: justify; }
-      strong { font-weight: bold; }
-      em { font-style: italic; }
-      ul, ol { margin: 6px 0 8px 20px; }
-      li { margin-bottom: 4px; }
-      hr { border: none; border-top: 1px solid #ccc; margin: 12px 0; }
-    </style>
-    ${html}
-  `;
-
-  // Contenedor temporal para renderizar
-  const wrap = document.createElement('div');
-  wrap.style.cssText = [
-    'position:fixed', 'left:-9999px', 'top:0',
-    'width:794px', 'background:#fff',
-    'padding:60px 72px', 'font-family:Georgia,serif',
-    'font-size:11px', 'line-height:1.7', 'color:#111',
-    'box-sizing:border-box', 'word-wrap:break-word'
-  ].join(';');
-  wrap.innerHTML = styledHtml;
-  document.body.appendChild(wrap);
-  await new Promise(r => setTimeout(r, 250));
-
-  const canvas = await html2canvas(wrap, {
-    width: 794, scale: 1.5,
-    backgroundColor: '#ffffff',
-    logging: false, useCORS: false
-  });
-  document.body.removeChild(wrap);
-
-  // Cortar en páginas A4
-  const scaleF   = 1.5;
-  const pageH_px = Math.round(1122 * scaleF); // A4 height en px
-  const pageW_px = canvas.width;
-  const totalPgs = Math.max(1, Math.ceil(canvas.height / pageH_px));
-
-  for (let i = 0; i < totalPgs; i++) {
-    const slice = document.createElement('canvas');
-    slice.width  = pageW_px;
-    slice.height = pageH_px;
-    const ctx = slice.getContext('2d');
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, pageW_px, pageH_px);
-    ctx.drawImage(canvas, 0, -(i * pageH_px));
-
-    const blob     = await new Promise(res => slice.toBlob(res, 'image/jpeg', 0.92));
-    const imgBytes = await blob.arrayBuffer();
-    const jpgImg   = await mergedDoc.embedJpg(imgBytes);
-    const page     = mergedDoc.addPage([595, 842]);
-    page.drawImage(jpgImg, { x: 0, y: 0, width: 595, height: 842 });
-  }
+  await renderBlocksToPDF(mergedDoc, blocks);
 }
 
 async function processFile(mergedDoc, file, idx, total) {
